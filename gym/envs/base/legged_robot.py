@@ -213,6 +213,13 @@ class LeggedRobot(BaseTask):
             device=self.device,
         ).squeeze(1)
 
+        candidate[:, 3] = torch_rand_float(
+            self.command_ranges["height"][0],
+            self.command_ranges["height"][1],
+            (self.num_envs, 1),
+            device=self.device,
+        ).squeeze(1)
+
         # set small commands to zero
         small_commands = torch.norm(candidate[:, :2], dim=1) <= 0.2
         candidate[:, :2].masked_fill_(small_commands.unsqueeze(1), 0.0)
@@ -430,7 +437,7 @@ class LeggedRobot(BaseTask):
             self.num_envs, self.num_actuators * 3, dtype=torch.float, device=self.device
         )
         self.commands = torch.zeros(
-            self.num_envs, 3, dtype=torch.float, device=self.device
+            self.num_envs, 4, dtype=torch.float, device=self.device
         )
         self.base_lin_vel = quat_rotate_inverse(
             self.base_quat, self.root_states[:, 7:10]
@@ -570,15 +577,15 @@ class LeggedRobot(BaseTask):
         return -torch.mean(torch.square(self.torques), dim=1)
 
     def _reward_dof_vel(self):
-        """Penalize dof velocities"""
         return -torch.mean(torch.square(self.dof_vel), dim=1)
 
     def _reward_action_rate(self):
-        """Penalize changes in actions"""
+        """Sum squared one-step and per-step-normalized two-step changes."""
         n = self.num_actuators
-        error = torch.square(
-            self.dof_pos_history[:, :n] - self.dof_pos_history[:, 2 * n :]
-        )
+        current = self.dof_pos_history[:, :n]
+        one_step = current - self.dof_pos_history[:, n : 2 * n]
+        two_step = (current - self.dof_pos_history[:, 2 * n :]) / 2
+        error = one_step.square() + two_step.square()
         return -torch.mean(error, dim=1)
 
     def _reward_action_rate2(self):
@@ -655,6 +662,11 @@ class LeggedRobot(BaseTask):
         """Tracking of angular velocity commands (yaw)"""
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
         return torch.exp(-ang_vel_error / self.cfg.reward_settings.tracking_sigma)
+
+    def _reward_tracking_height(self):
+        """Tracking of commanded base height"""
+        height_error = (self.commands[:, 3] - self.base_height[:, 0]) / self.scales["base_height"]
+        return self._sqrdexp(height_error)
 
     def _reward_feet_contact_forces(self):
         """penalize high contact forces"""

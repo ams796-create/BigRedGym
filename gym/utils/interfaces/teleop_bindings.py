@@ -79,14 +79,27 @@ class TeleopCommands:
         self.max_vel_yaw = 2.0
         self.increment_yaw = self.max_vel_yaw * 0.2
 
+        self.max_height_up = 0.45    # near full stand
+        self.max_height_down = 0.15 # a meaningful crouch, still above the ground
+        self.increment_z = (self.max_height_up - self.max_height_down) * 0.5
+
         env.commands[:] = 0.0
-        env.commands[:, 0] = 1.0  # seed forward velocity so motion is visible
+        env.commands[:, 0] = 0.0  # seed forward velocity so motion is visible
+        env.commands[:, 3] = 0.4  # start near a natural standing height
         if hasattr(env.cfg, "commands"):
             env.cfg.commands.resampling_time = env.max_episode_length_s + 1
 
     def apply(self, action: str) -> None:
         """Apply one discrete press of ``action`` (see BINDINGS)."""
         c = self.env.commands
+        if action in ("up", "down"):
+            c[:, 0:3] = 0.0 
+        sim_time = self.env.common_step_counter / self.env.cfg.control.ctrl_frequency
+        print(
+            f"[teleop] t={sim_time:.2f}s action={action!r} "
+            f"commands={c[0].tolist()} "
+            f"actual_height={self.env.base_height[0, 0].item():.3f}"
+        )
         if action == "forward":
             c[:, 0] = torch.clamp(c[:, 0] + self.increment_x, max=self.max_vel_forward)
         elif action == "back":
@@ -94,13 +107,15 @@ class TeleopCommands:
         elif action == "strafe_left":
             c[:, 1] = torch.clamp(c[:, 1] + self.increment_y, max=self.max_vel_sideways)
         elif action == "strafe_right":
-            c[:, 1] = torch.clamp(
-                c[:, 1] - self.increment_y, min=-self.max_vel_sideways
-            )
+            c[:, 1] = torch.clamp(c[:, 1] - self.increment_y, min=-self.max_vel_sideways)
         elif action == "yaw_left":
             c[:, 2] = torch.clamp(c[:, 2] + self.increment_yaw, max=self.max_vel_yaw)
         elif action == "yaw_right":
             c[:, 2] = torch.clamp(c[:, 2] - self.increment_yaw, min=-self.max_vel_yaw)
+        elif action == "up":
+            c[:, 3] = torch.clamp(c[:, 3] + self.increment_z, max=self.max_height_up)
+        elif action == "down":
+            c[:, 3] = torch.clamp(c[:, 3] - self.increment_z, min=self.max_height_down)
         elif action == "reset":
             self.env.timed_out[:] = True
             self.env.reset()
